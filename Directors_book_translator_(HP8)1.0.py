@@ -1,4 +1,5 @@
 import os
+import time
 import pdfplumber
 import re
 import pandas as pd
@@ -9,8 +10,8 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 
 # Configuration
-page_limit = 223  # Number of pages to read from the PDF
-deepL_api_key = 'KEY'  # Replace with your DeepL API key
+page_limit = 50  # Number of pages to read from the PDF
+deepL_api_key = '8e9eef6f-7835-4fe6-a0e7-126780ef58b4:fx'  # Replace with your DeepL API key
 output_pdf = 'OutputPDFs/output.pdf'  # Output PDF file
 pdf_dir = 'SourcePDFs'  # Directory containing PDF files
 margin = 30
@@ -40,6 +41,7 @@ def select_pdf_file():
 
 # Function to extract text from a PDF file with page limit and add page markers
 def extract_text_from_pdf(pdf_path):
+    print("Extracting text from pdf... ")
     text = ""
     try:
         with pdfplumber.open(pdf_path) as pdf:
@@ -50,6 +52,7 @@ def extract_text_from_pdf(pdf_path):
                 if page_text:
                     text += page_text + "\n"
                     text += f"IIII: ~~~~~  {page_num + 1}  ~~~~~"
+        print("Successful text extraction from pdf! ")
         return text.strip()
     except Exception as e:
         print(f"Error reading PDF file: {e}")
@@ -59,6 +62,7 @@ def extract_text_from_pdf(pdf_path):
 def clean_text(text):
     text = re.sub(r'\s+', ' ', text)
     text = text.replace('\f', ';;;;')
+    print("Successful text cleaning! ")
     return text
 
 # Function to split text by speaker tags, including names with parentheses
@@ -66,6 +70,7 @@ def split_sentences(text):
     # Use a regex to split on patterns like 'JAMES:', 'HERMIONE:', or 'JAMES (with a grin):'
     sentences = re.split(r'(?=\b[A-Z]{3,}(?:\s*\([^)]*\))?:\s)', text)
     processed_sentences = [sentence.strip() for sentence in sentences if sentence.strip()]
+    print("\nSuccessful text splitting! ")
     return processed_sentences
 
 
@@ -77,12 +82,15 @@ def create_dataframe_from_text(text):
         'Sentence': sentences,
         'Translation': [''] * len(sentences)
     })
+    print("Successful dataframe creation! ")
     return df
 
 # Function to translate sentences using DeepL with error handling
 def translate_sentences(sentences):
+    print("___INITIATING TRANSLATION___")
     translations = []
     for sentence in sentences:
+        print('Translating "',sentence,'"')
         try:
             response = requests.post(
                 'https://api-free.deepl.com/v2/translate',
@@ -94,15 +102,34 @@ def translate_sentences(sentences):
                 }
             )
             response.raise_for_status()  # Check for HTTP errors
+
             result = response.json()
             translated_text = result['translations'][0]['text']
             translations.append(translated_text)
-        except requests.exceptions.RequestException as e:
-            print(f"API request error: {e}")
+
+        except requests.exceptions.HTTPError as http_err:
+            if response.status_code == 456:
+                print("Error 456: Quota exceeded. Please check your DeepL plan or try again later.")
+                translations.append("[Translation Error: Quota exceeded]")
+                break  # Stop further translations since quota is exceeded
+            else:
+                print(f"HTTP error occurred: {http_err} (Status code: {response.status_code})")
+                translations.append("[Translation Error]")
+
+        except requests.exceptions.ConnectionError:
+            print("Connection error. Retrying in 5 seconds...")
+            time.sleep(5)
+            continue  # Retry the current sentence
+
+        except requests.exceptions.Timeout:
+            print("Request timed out. Retrying in 5 seconds...")
+            time.sleep(5)
+            continue  # Retry the current sentence
+
+        except Exception as err:
+            print(f"An error occurred: {err}")
             translations.append("[Translation Error]")
-        except (KeyError, IndexError) as e:
-            print(f"API response error: {e}")
-            translations.append("[Invalid API Response]")
+    print("Successful translations! ")
     return translations
 
 # Function to generate a printable PDF from the DataFrame
@@ -136,18 +163,37 @@ def generate_pdf(df, output_pdf):
 
     elements.append(table)
     pdf.build(elements)
+    print("Successfully built PDF! ")
 
-# Main script execution
-if __name__ == "__main__":
-    pdf_path = select_pdf_file()
-    if pdf_path:
-        text = extract_text_from_pdf(pdf_path)
-        cleaned_text = clean_text(text)
-        df = create_dataframe_from_text(cleaned_text)
+def calculate_character_count(text):
+    return len(text)
 
-        # Translate sentences and populate the DataFrame
-        df['Translation'] = translate_sentences(df['Sentence'])
+# Prompt user for continuation based on character count and cost
+def prompt_user_for_translation(character_count):
+    cost_per_million_chars = 20.00
+    characters_per_million = 1_000_000
+    estimated_cost = (character_count / characters_per_million) * cost_per_million_chars
+    print(f"\nTotal characters in source document: {character_count}")
+    print(f"Estimated cost for translation: €{estimated_cost:.2f}")
 
-        # Generate PDF from DataFrame
-        generate_pdf(df, output_pdf)
-        print("PDF document has been created:", output_pdf)
+    user_input = input("Would you like to continue with the translation? (yes/no): ")
+    return user_input.lower() == 'yes'
+
+
+# Main Execution Flow
+text = extract_text_from_pdf(select_pdf_file())
+cleaned_text = clean_text(text)
+character_count = len(cleaned_text)
+
+# Ask user if they want to continue with the translation process
+if prompt_user_for_translation(character_count):
+    df = create_dataframe_from_text(cleaned_text)
+
+    # Translate sentences and populate the DataFrame
+    df['Translation'] = translate_sentences(df['Sentence'])
+
+    # Generate PDF from DataFrame
+    generate_pdf(df, output_pdf)
+    print("PDF document has been created:", output_pdf)
+else:
+    print("Translation process was canceled.")
