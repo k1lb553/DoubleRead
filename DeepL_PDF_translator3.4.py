@@ -1,3 +1,4 @@
+import time
 import os
 import pdfplumber
 import re
@@ -9,12 +10,16 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 
 # Configuration
-page_limit = 5  # Number of pages to read from the PDF
-deepL_api_key = 'KEY'  # Replace with your DeepL API key
+page_limit = 151  # Number of pages to read from the PDF
+deepL_api_key = '8651162b-f3c0-42f0-9207-83ce55041539:fx'  # Replace with your DeepL API key
 output_pdf = 'OutputPDFs/output.pdf'  # Output PDF file
 pdf_dir = 'SourcePDFs'  # Directory containing PDF files
 margin = 30
 cell_padding = 4
+request_cooldown_sec = 1
+source_language = "EN"
+target_language = "DA"
+target_lan_fist_col = False
 
 # Function to list available PDF files and ask user to select one
 def select_pdf_file():
@@ -41,6 +46,7 @@ def select_pdf_file():
 # Function to extract text from a PDF file with page limit and add page markers
 def extract_text_from_pdf(pdf_path):
     text = ""
+    global page_num
     try:
         with pdfplumber.open(pdf_path) as pdf:
             for page_num, page in enumerate(pdf.pages):
@@ -49,7 +55,8 @@ def extract_text_from_pdf(pdf_path):
                 page_text = page.extract_text()
                 if page_text:
                     text += page_text + "\n"
-                    text += f". Page {page_num + 1} ends here."
+                    text += f" | - - - - {page_num + 1} - - - - | "
+                    print("Processing page: ", page_num+1)
         return text.strip()
     except Exception as e:
         print(f"Error reading PDF file: {e}")
@@ -94,8 +101,8 @@ def translate_sentences(sentences):
                 data={
                     'auth_key': deepL_api_key,
                     'text': sentence,
-                    'source_lang': 'EN',  # Source language
-                    'target_lang': 'DA'   # Target language
+                    'source_lang': source_language,  # Source language
+                    'target_lang': target_language   # Target language
                 }
             )
             response.raise_for_status()  # Check for HTTP errors
@@ -108,6 +115,7 @@ def translate_sentences(sentences):
         except (KeyError, IndexError) as e:
             print(f"API response error: {e}")
             translations.append("[Invalid API Response]")
+        time.sleep(request_cooldown_sec)
     return translations
 
 # Function to generate a printable PDF from the DataFrame
@@ -117,12 +125,22 @@ def generate_pdf(df, output_pdf):
     elements = []
 
     # Define table data and style
-    table_data = [['No.', 'Translation', 'Sentence']]
-    for _, row in df.iterrows():
-        number = row['No.']
-        sentence = Paragraph(row['Sentence'], styles['Normal'])
-        translation = Paragraph(row['Translation'], styles['Normal'])
-        table_data.append([number, translation, sentence])
+    if target_lan_fist_col:
+        table_data = [['No.', 'Translation', 'Sentence']]
+        for _, row in df.iterrows():
+            number = row['No.']
+            sentence = Paragraph(row['Sentence'], styles['Normal'])
+            translation = Paragraph(row['Translation'], styles['Normal'])
+            
+            table_data.append([number, translation, sentence])
+    else:
+        table_data = [['No.', 'Sentence', 'Translation']]
+        for _, row in df.iterrows():
+            number = row['No.']
+            sentence = Paragraph(row['Sentence'], styles['Normal'])
+            translation = Paragraph(row['Translation'], styles['Normal'])
+            
+            table_data.append([number, sentence, translation])
 
     table = Table(table_data, colWidths=[30, 250, 250])
     table.setStyle(TableStyle([
