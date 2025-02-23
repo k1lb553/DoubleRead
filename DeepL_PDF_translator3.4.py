@@ -4,6 +4,7 @@ import pdfplumber
 import re
 import pandas as pd
 import requests
+import deepl
 from reportlab.lib.pagesizes import A4
 from reportlab.lib import colors
 from reportlab.lib.styles import getSampleStyleSheet
@@ -11,7 +12,7 @@ from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph
 
 # Configuration
 page_limit = 151  # Number of pages to read from the PDF
-deepL_api_key = '8651162b-f3c0-42f0-9207-83ce55041539:fx'  # Replace with your DeepL API key
+deepL_api_key = '...'  # Replace with your DeepL API key
 output_pdf = 'OutputPDFs/output.pdf'  # Output PDF file
 pdf_dir = 'SourcePDFs'  # Directory containing PDF files
 margin = 30
@@ -19,7 +20,7 @@ cell_padding = 4
 request_cooldown_sec = 1
 source_language = "EN"
 target_language = "DA"
-target_lan_fist_col = False
+target_lan_fist_col = True
 
 # Function to list available PDF files and ask user to select one
 def select_pdf_file():
@@ -70,6 +71,7 @@ def clean_text(text):
 
 # Function to split text into sentences with custom rules
 def split_sentences(text):
+    print("Splitting sentences...")
     sentences = re.split(r'(?<=[.!?]) +', text)
     processed_sentences = []
 
@@ -83,6 +85,7 @@ def split_sentences(text):
 
 # Function to create a pandas DataFrame from text with an additional numbering column
 def create_dataframe_from_text(text):
+    print("Creating dataframe from text...")
     sentences = split_sentences(text)
     df = pd.DataFrame({
         'No.': range(1, len(sentences) + 1),
@@ -92,34 +95,27 @@ def create_dataframe_from_text(text):
     return df
 
 # Function to translate sentences using DeepL with error handling
-def translate_sentences(sentences):
+def translate_sentences(sentences, auth_key, source_language, target_language, request_cooldown_sec=0.1):
+    translator = deepl.Translator(auth_key)
     translations = []
-    for sentence in sentences:
+    
+    for count, sentence in enumerate(sentences, start=1):
+        print(f"Translating sentence: {count}")
         try:
-            response = requests.post(
-                'https://api-free.deepl.com/v2/translate',
-                data={
-                    'auth_key': deepL_api_key,
-                    'text': sentence,
-                    'source_lang': source_language,  # Source language
-                    'target_lang': target_language   # Target language
-                }
-            )
-            response.raise_for_status()  # Check for HTTP errors
-            result = response.json()
-            translated_text = result['translations'][0]['text']
-            translations.append(translated_text)
-        except requests.exceptions.RequestException as e:
-            print(f"API request error: {e}")
+            result = translator.translate_text(sentence, source_lang=source_language, target_lang=target_language)
+            translations.append(result.text)
+        except deepl.DeepLException as e:
+            print(f"DeepL API error: {e}")
             translations.append("[Translation Error]")
-        except (KeyError, IndexError) as e:
-            print(f"API response error: {e}")
-            translations.append("[Invalid API Response]")
+        
         time.sleep(request_cooldown_sec)
+    
     return translations
+
 
 # Function to generate a printable PDF from the DataFrame
 def generate_pdf(df, output_pdf):
+    print("Generating pdf...")
     pdf = SimpleDocTemplate(output_pdf, pagesize=A4, rightMargin=margin, leftMargin=margin, topMargin=margin, bottomMargin=margin)
     styles = getSampleStyleSheet()
     elements = []
@@ -169,7 +165,7 @@ if __name__ == "__main__":
         df = create_dataframe_from_text(cleaned_text)
 
         # Translate sentences and populate the DataFrame
-        df['Translation'] = translate_sentences(df['Sentence'])
+        df['Translation'] = translate_sentences(df['Sentence'], auth_key=deepL_api_key, source_language=source_language, target_language=target_language)
 
         # Generate PDF from DataFrame
         generate_pdf(df, output_pdf)
